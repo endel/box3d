@@ -1414,3 +1414,175 @@ bool b3DeserializeIntoShell( const uint8_t* data, int size, b3World* world, b3Re
 
 	return r->ok;
 }
+
+// Public snapshot API. The image is its length, a table of the geometry its shapes use, then the
+// world's stream: geometry the context already held at save travels as its hash alone. The length
+// refuses a cut image up front: the stream overwrites the world as it goes, so a failure in it
+// leaves a world that can't even be destroyed.
+
+#define B3_IMAGE_MAGIC 0x31494E42u // 'BNI1'
+
+struct b3SnapshotContext
+{
+	b3Recording* recording;
+
+	// Registry entries below this are held by every peer
+	int sharedCount;
+	b3RecBuffer stream;
+	b3RecBuffer image;
+};
+
+b3SnapshotContext* b3CreateSnapshotContext( void )
+{
+	b3SnapshotContext* context = (b3SnapshotContext*)b3Alloc( sizeof( b3SnapshotContext ) );
+	memset( context, 0, sizeof( b3SnapshotContext ) );
+	context->recording = b3CreateRecording( 1 << 16 );
+	return context;
+}
+
+void b3DestroySnapshotContext( b3SnapshotContext* context )
+{
+	b3RecBufFree( &context->stream );
+	b3RecBufFree( &context->image );
+	b3DestroyRecording( context->recording );
+	b3Free( context, sizeof( b3SnapshotContext ) );
+}
+
+void b3SnapshotContext_AddWorld( b3SnapshotContext* context, b3WorldId worldId )
+{
+	b3World* world = b3GetWorldFromId( worldId );
+	b3Recording* rec = context->recording;
+	for ( int i = 0; i < world->shapes.count; ++i )
+	{
+		const b3Shape* shape = world->shapes.data + i;
+		if ( shape->id != i )
+		{
+			continue;
+		}
+		switch ( shape->type )
+		{
+			case b3_hullShape:
+				b3RecInternHull( rec, shape->hull );
+				break;
+			case b3_meshShape:
+				b3RecInternMesh( rec, shape->mesh.data );
+				break;
+			case b3_heightShape:
+				b3RecInternHeightField( rec, shape->heightField );
+				break;
+			case b3_compoundShape:
+				b3RecInternCompound( rec, shape->compound );
+				break;
+			default:
+				break;
+		}
+	}
+	context->sharedCount = rec->registry.entries.count;
+}
+
+int b3World_SaveSnapshot( b3WorldId worldId, b3SnapshotContext* context, const void** data )
+{
+	b3World* world = b3GetUnlockedWorldFromId( worldId );
+	if ( world == NULL )
+	{
+		return 0;
+	}
+
+	b3Recording* rec = context->recording;
+	context->stream.size = 0;
+	b3SerializeWorld( world, &context->stream, rec );
+
+	b3RecBuffer* out = &context->image;
+	out->size = 0;
+	b3SnapW_U32( out, B3_IMAGE_MAGIC );
+	b3SnapW_I32( out, 0 );
+	int count = rec->registry.entries.count;
+	b3SnapW_I32( out, count );
+	for ( int i = 0; i < count; ++i )
+	{
+		const b3GeometryEntry* e = rec->registry.entries.data + i;
+		int travels = i >= context->sharedCount ? e->byteCount : 0;
+		b3SnapW_U32( out, (uint32_t)e->kind );
+		b3SnapW_Bytes( out, &e->contentHash, sizeof( uint64_t ) );
+		b3SnapW_I32( out, e->byteCount );
+		b3SnapW_I32( out, travels );
+		if ( travels > 0 )
+		{
+			b3SnapW_Bytes( out, e->bytes, travels );
+		}
+	}
+	b3SnapW_Bytes( out, context->stream.data, context->stream.size );
+	memcpy( out->data + sizeof( uint32_t ), &out->size, sizeof( int ) );
+	*data = out->data;
+	return out->size;
+}
+
+bool b3World_LoadSnapshot( b3WorldId worldId, b3SnapshotContext* context, const void* data, int size )
+{
+	b3World* world = b3GetUnlockedWorldFromId( worldId );
+	if ( world == NULL )
+	{
+		return false;
+	}
+
+	b3GeometryRegistry* registry = &context->recording->registry;
+	b3SnapReader reader = { (const uint8_t*)data, 0, size, true };
+	b3SnapReader* r = &reader;
+	if ( b3SnapR_U32( r ) != B3_IMAGE_MAGIC || b3SnapR_I32( r ) != size )
+	{
+		return false;
+	}
+
+	int count = b3SnapR_I32( r );
+	if ( r->ok == false || b3SnapCheckCount( r, count, sizeof( b3RegistrySlot ), 20 ) == false )
+	{
+		return false;
+	}
+
+	b3RegistrySlot* slots = (b3RegistrySlot*)b3Alloc( ( count + 1 ) * sizeof( b3RegistrySlot ) );
+	bool ok = true;
+	for ( int i = 0; i < count && ok; ++i )
+	{
+		b3GeometryKind kind = (b3GeometryKind)b3SnapR_U32( r );
+		uint64_t hash = 0;
+		b3SnapR_Bytes( r, &hash, sizeof( uint64_t ) );
+		int byteCount = b3SnapR_I32( r );
+		int travels = b3SnapR_I32( r );
+		int index = B3_NULL_INDEX;
+		if ( r->ok && travels > 0 && travels <= size - r->cursor )
+		{
+			index = (int)b3InternGeometry( registry, kind, hash, reader.data + r->cursor, travels );
+			r->cursor += travels;
+		}
+		else
+		{
+			for ( int k = 0; k < registry->entries.count; ++k )
+			{
+				const b3GeometryEntry* e = registry->entries.data + k;
+				if ( e->contentHash == hash && e->byteCount == byteCount && e->kind == kind )
+				{
+					index = k;
+					break;
+				}
+			}
+		}
+		ok = r->ok && index != B3_NULL_INDEX;
+		if ( ok )
+		{
+			const b3GeometryEntry* e = registry->entries.data + index;
+			slots[i] = (b3RegistrySlot){ e->kind, e->byteCount, e->bytes };
+		}
+	}
+
+	if ( ok )
+	{
+		b3RecReader rdr;
+		memset( &rdr, 0, sizeof( rdr ) );
+		rdr.slots = slots;
+		rdr.slotCount = count;
+		ok = b3DeserializeIntoShell( reader.data + r->cursor, size - r->cursor, world, &rdr );
+	}
+
+	b3Free( slots, ( count + 1 ) * sizeof( b3RegistrySlot ) );
+	return ok;
+}

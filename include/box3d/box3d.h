@@ -515,6 +515,52 @@ B3_API b3RecQueryHit b3RecPlayer_GetFrameQueryHit( const b3RecPlayer* player, in
 
 /**@}*/ // recording
 
+/**
+ * @defgroup snapshot Snapshot
+ * @brief Save a world's whole simulation state and take it on in another world, on any target.
+ *
+ * A world that loads an image steps exactly as the saved world would have, warm starting and
+ * pending events included. An image's bytes depend only on the world's state, so peers of
+ * different pointer widths and SIMD widths exchange them directly. Images are little endian.
+ * @{
+ */
+
+/// Opaque table of the geometry shapes use. Peers that build the same geometry can share it through
+/// their contexts and keep it out of the images they exchange.
+typedef struct b3SnapshotContext b3SnapshotContext;
+
+/// Create an empty context.
+B3_API b3SnapshotContext* b3CreateSnapshotContext( void );
+
+/// Destroy a context. This must come after the worlds loaded through it, whose shapes point into it.
+B3_API void b3DestroySnapshotContext( b3SnapshotContext* context );
+
+/// Add the geometry of every shape in a world, to leave out of the images saved from now on. Every
+/// peer that loads those images must add the same geometry first. Geometry created later travels
+/// in the image.
+B3_API void b3SnapshotContext_AddWorld( b3SnapshotContext* context, b3WorldId worldId );
+
+/// Save a world's simulation state. Call this between steps. User data is not saved.
+/// @param worldId the world to save
+/// @param context geometry to leave out of the image
+/// @param data receives the image, owned by the context and valid until its next save
+/// @return the size of the image in bytes
+B3_API int b3World_SaveSnapshot( b3WorldId worldId, b3SnapshotContext* context, const void** data );
+
+/// Replace everything in a world with a saved one. Call this between steps. Ids made on the saved
+/// world name the same objects here once their world0 is this world's. User data reads as NULL.
+/// @param worldId the world to replace
+/// @param context receives the geometry the image carries and must outlive the world
+/// @param data the image
+/// @param size the size of the image in bytes
+/// @return false if the image was refused, leaving the world unchanged: it is cut short, comes from
+/// another version or build, or needs geometry this context lacks.
+/// @warning the bytes are trusted. A corrupt or crafted image of the right length can crash, now or
+/// in a later step, so images must travel over a channel that guards their integrity.
+B3_API bool b3World_LoadSnapshot( b3WorldId worldId, b3SnapshotContext* context, const void* data, int size );
+
+/**@}*/ // snapshot
+
 /** @} */ // world
 
 /**
