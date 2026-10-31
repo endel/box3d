@@ -3,6 +3,15 @@
 
 #pragma once
 
+// A pointer in 8 bytes on every target: snapshots copy the structs holding one raw, and
+// peers of different pointer widths must read each other's.
+#define B3_PTR( decl, slot )                                                                                                     \
+	union                                                                                                                        \
+	{                                                                                                                            \
+		decl;                                                                                                                    \
+		uint64_t slot;                                                                                                           \
+	}
+
 #include "box3d/base.h"
 
 #include <stddef.h>

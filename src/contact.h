@@ -134,7 +134,7 @@ typedef struct b3Contact
 	uint32_t flags;
 
 	// todo embed single manifold with ability to allocate overfloat, use union.
-	b3Manifold* manifolds;
+	B3_PTR( b3Manifold* manifolds, manifoldsSlot );
 	int manifoldCount;
 
 	// Cache for contact recycling.

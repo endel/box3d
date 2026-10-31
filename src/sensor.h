@@ -20,6 +20,9 @@ typedef struct b3Visitor
 {
 	int shapeId;
 	uint16_t generation;
+
+	// Snapshots copy this raw: no bytes left to chance
+	uint16_t padding;
 } b3Visitor;
 
 b3DeclareArray( b3Visitor );

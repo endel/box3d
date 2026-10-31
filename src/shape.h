@@ -42,11 +42,11 @@ typedef struct b3Shape
 
 	int materialCount;
 	b3SurfaceMaterial material;
-	b3SurfaceMaterial* materials;
+	B3_PTR( b3SurfaceMaterial* materials, materialsSlot );
 
 	b3Filter filter;
-	void* userData;
-	void* userShape;
+	B3_PTR( void* userData, userDataSlot );
+	B3_PTR( void* userShape, userShapeSlot );
 
 	uint32_t nameId;
 	uint16_t generation;
@@ -62,6 +62,7 @@ typedef struct b3Shape
 		b3Mesh mesh;
 		const b3HeightFieldData* heightField;
 		const b3CompoundData* compound;
+		uint64_t geometryBytes[4];
 	};
 
 } b3Shape;

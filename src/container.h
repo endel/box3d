@@ -12,7 +12,7 @@
 #define b3DeclareArray( T )                                                                                                      \
 	typedef struct b3DynamicArray_##T                                                                                            \
 	{                                                                                                                            \
-		struct T* data;                                                                                                          \
+		B3_PTR( struct T* data, dataSlot );                                                                                      \
 		int count;                                                                                                               \
 		int capacity;                                                                                                            \
 	} b3DynamicArray_##T
@@ -20,7 +20,7 @@
 #define b3DeclareArrayNative( T )                                                                                                \
 	typedef struct b3DynamicArray_##T                                                                                            \
 	{                                                                                                                            \
-		T* data;                                                                                                                 \
+		B3_PTR( T* data, dataSlot );                                                                                             \
 		int count;                                                                                                               \
 		int capacity;                                                                                                            \
 	} b3DynamicArray_##T

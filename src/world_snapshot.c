@@ -33,12 +33,13 @@
 
 // Snapshot image magic 'BNS3' and version
 #define B3_SNAP_MAGIC 0x33534E42u
-#define B3_SNAP_VERSION 11u // isotropic inertia tolerance
+#define B3_SNAP_VERSION 12u // one layout on every pointer width, end events
 
 #define B3_SNAP_FLAG_VALIDATION 0x1u
 #define B3_SNAP_FLAG_DOUBLE_PRECISION 0x2u
 
-// Layout hash over all POD-copied structs + key constants.
+// Layout hash over the structs copied raw + key constants. Those written field by field are out
+// of it: they hold pointers, so their size is the target's and says nothing of the image.
 // Changing a struct size updates this, catching ABI drift early.
 static uint32_t b3ComputeLayoutHash( void )
 {
@@ -54,15 +55,10 @@ static uint32_t b3ComputeLayoutHash( void )
 	MIX( sizeof( b3Manifold ) )
 	MIX( sizeof( b3Joint ) )
 	MIX( sizeof( b3JointSim ) )
-	MIX( sizeof( b3Island ) )
 	MIX( sizeof( b3IslandSim ) )
 	MIX( sizeof( b3ContactLink ) )
 	MIX( sizeof( b3JointLink ) )
-	MIX( sizeof( b3Sensor ) )
 	MIX( sizeof( b3Visitor ) )
-	MIX( sizeof( b3SolverSet ) )
-	MIX( sizeof( b3GraphColor ) )
-	MIX( sizeof( b3DynamicTree ) )
 	MIX( sizeof( b3TreeNode ) )
 	MIX( sizeof( b3TreeProxy ) )
 	MIX( sizeof( b3HullData ) )
@@ -86,13 +82,11 @@ static uint32_t b3ComputeLayoutHash( void )
 	MIX( B3_COMPOUND_VERSION & 0xFFFFFFFFu )
 	MIX( B3_COMPOUND_VERSION >> 32 )
 	MIX( sizeof( b3SetItem ) )
-	MIX( sizeof( b3IdPool ) )
 	MIX( sizeof( b3SurfaceMaterial ) )
 	MIX( sizeof( b3ContactSpec ) )
 	MIX( sizeof( b3TriangleCache ) )
 	MIX( B3_GRAPH_COLOR_COUNT )
 	MIX( b3_bodyTypeCount )
-	MIX( sizeof( void* ) )
 #undef MIX
 	return h;
 }
@@ -559,11 +553,8 @@ static void b3SerShapes( b3RecBuffer* buf, b3World* world, b3Recording* rec )
 		shape.materials = NULL;
 		shape.userData = NULL;
 		shape.userShape = NULL;
-		// Zero the geometry union so free-slot images have deterministic bytes
-		if ( !isLive )
-		{
-			memset( &shape.capsule, 0, sizeof( shape.capsule ) );
-		}
+		// The geometry follows, its pointers as ids: the union's bytes never travel.
+		memset( shape.geometryBytes, 0, sizeof( shape.geometryBytes ) );
 		b3SnapW_Bytes( buf, &shape, sizeof( b3Shape ) );
 
 		if ( !isLive )
@@ -682,7 +673,7 @@ static void b3DesShapes( b3SnapReader* r, b3World* world, b3RecReader* rdr )
 		dst->materials = NULL;
 		dst->userData = NULL;
 		dst->userShape = NULL;
-		memset( &dst->capsule, 0, sizeof( dst->capsule ) );
+		memset( dst->geometryBytes, 0, sizeof( dst->geometryBytes ) );
 
 		bool isLive = ( dst->id == i );
 
@@ -1143,6 +1134,29 @@ int b3SerializeWorld( b3World* world, b3RecBuffer* buf, b3Recording* rec )
 
 	b3SerNames( buf, &world->names );
 
+	// Queued between steps, and read after the next one: they aren't rebuilt.
+	// The ids they hold name this world's slot, which is nothing to the image.
+	for ( int i = 0; i < 2; ++i )
+	{
+		b3SnapW_I32( buf, world->contactEndEvents[i].count );
+		for ( int k = 0; k < world->contactEndEvents[i].count; ++k )
+		{
+			b3ContactEndTouchEvent e = world->contactEndEvents[i].data[k];
+			e.shapeIdA.world0 = 0;
+			e.shapeIdB.world0 = 0;
+			e.contactId.world0 = 0;
+			b3SnapW_Bytes( buf, &e, sizeof( e ) );
+		}
+		b3SnapW_I32( buf, world->sensorEndEvents[i].count );
+		for ( int k = 0; k < world->sensorEndEvents[i].count; ++k )
+		{
+			b3SensorEndTouchEvent e = world->sensorEndEvents[i].data[k];
+			e.sensorShapeId.world0 = 0;
+			e.visitorShapeId.world0 = 0;
+			b3SnapW_Bytes( buf, &e, sizeof( e ) );
+		}
+	}
+
 	return buf->size - startSize;
 }
 
@@ -1377,6 +1391,26 @@ bool b3DeserializeIntoShell( const uint8_t* data, int size, b3World* world, b3Re
 	}
 
 	b3DesNames( r, &world->names );
+
+	for ( int i = 0; i < 2; ++i )
+	{
+		b3DesPodArray( r, world->contactEndEvents[i] );
+		b3DesPodArray( r, world->sensorEndEvents[i] );
+		// Ids name the world they were made in, which may be another slot here.
+		for ( int k = 0; r->ok && k < world->contactEndEvents[i].count; ++k )
+		{
+			b3ContactEndTouchEvent* e = world->contactEndEvents[i].data + k;
+			e->shapeIdA.world0 = world->worldId;
+			e->shapeIdB.world0 = world->worldId;
+			e->contactId.world0 = world->worldId;
+		}
+		for ( int k = 0; r->ok && k < world->sensorEndEvents[i].count; ++k )
+		{
+			b3SensorEndTouchEvent* e = world->sensorEndEvents[i].data + k;
+			e->sensorShapeId.world0 = world->worldId;
+			e->visitorShapeId.world0 = world->worldId;
+		}
+	}
 
 	return r->ok;
 }

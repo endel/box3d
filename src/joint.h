@@ -27,7 +27,7 @@ typedef struct b3JointEdge
 // Map from b3JointId to b3Joint in the solver sets
 typedef struct b3Joint
 {
-	void* userData;
+	B3_PTR( void* userData, userDataSlot );
 
 	// index of simulation set stored in b3World
 	// B3_NULL_INDEX when slot is free

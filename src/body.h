@@ -79,7 +79,7 @@ enum b3BodyFlags
 // Body organizational details that are not used in the solver.
 typedef struct b3Body
 {
-	void* userData;
+	B3_PTR( void* userData, userDataSlot );
 
 	// index of solver set stored in b3World
 	// may be B3_NULL_INDEX
