@@ -251,6 +251,9 @@ static int EventsTravel( void )
 	b3SensorEvents sawLoaded = b3World_GetSensorEvents( loadedId );
 	ENSURE( saw.beginCount == sawLoaded.beginCount && saw.endCount == sawLoaded.endCount );
 
+	// Memory let go between saves costs nothing but the next save's allocation.
+	b3SnapshotContext_ReleaseImage( savedContext );
+	b3SnapshotContext_ReleaseImage( loadedContext );
 	Step( savedId, 30 );
 	Step( loadedId, 30 );
 	ENSURE( SameImage( savedId, savedContext, loadedId, loadedContext ) );

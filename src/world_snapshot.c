@@ -1636,6 +1636,12 @@ static bool b3ReadGeometryTable( b3SnapReader* r, b3GeometryRegistry* registry, 
 	return ok;
 }
 
+void b3SnapshotContext_ReleaseImage( b3SnapshotContext* context )
+{
+	b3RecBufFree( &context->stream );
+	b3RecBufFree( &context->image );
+}
+
 bool b3SnapshotContext_AddImage( b3SnapshotContext* context, const void* data, int size )
 {
 	b3SnapReader reader = { (const uint8_t*)data, 0, size, true };

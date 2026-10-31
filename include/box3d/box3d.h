@@ -540,6 +540,10 @@ B3_API void b3DestroySnapshotContext( b3SnapshotContext* context );
 /// in the image.
 B3_API void b3SnapshotContext_AddWorld( b3SnapshotContext* context, b3WorldId worldId );
 
+/// Free the memory the last save used, which is the size of the world, for a host that saves
+/// rarely. The image from that save is gone. The geometry stays.
+B3_API void b3SnapshotContext_ReleaseImage( b3SnapshotContext* context );
+
 /// Add the geometry an image carries, as loading it does. A caller whose allocator keeps this
 /// context's memory apart from the world's calls this first: the load then allocates nothing here.
 /// @return false if the image is cut short, or needs geometry this context lacks
