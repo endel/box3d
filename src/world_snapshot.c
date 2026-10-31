@@ -33,7 +33,7 @@
 
 // Snapshot image magic 'BNS3' and version
 #define B3_SNAP_MAGIC 0x33534E42u
-#define B3_SNAP_VERSION 12u // one layout on every pointer width, end events
+#define B3_SNAP_VERSION 12u // one layout on every pointer width, the step's events
 
 #define B3_SNAP_FLAG_VALIDATION 0x1u
 #define B3_SNAP_FLAG_DOUBLE_PRECISION 0x2u
@@ -1134,8 +1134,9 @@ int b3SerializeWorld( b3World* world, b3RecBuffer* buf, b3Recording* rec )
 
 	b3SerNames( buf, &world->names );
 
-	// Queued between steps, and read after the next one: they aren't rebuilt.
-	// The ids they hold name this world's slot, which is nothing to the image.
+	// The last step's events, readable until the next step and rebuilt by nothing. Body move and
+	// joint events hold user data, so they aren't kept. The ids name this world's slot, which is
+	// nothing to the image.
 	for ( int i = 0; i < 2; ++i )
 	{
 		b3SnapW_I32( buf, world->contactEndEvents[i].count );
@@ -1155,6 +1156,44 @@ int b3SerializeWorld( b3World* world, b3RecBuffer* buf, b3Recording* rec )
 			e.visitorShapeId.world0 = 0;
 			b3SnapW_Bytes( buf, &e, sizeof( e ) );
 		}
+	}
+
+	b3SnapW_I32( buf, world->contactBeginEvents.count );
+	for ( int k = 0; k < world->contactBeginEvents.count; ++k )
+	{
+		b3ContactBeginTouchEvent e = world->contactBeginEvents.data[k];
+		e.shapeIdA.world0 = 0;
+		e.shapeIdB.world0 = 0;
+		e.contactId.world0 = 0;
+		b3SnapW_Bytes( buf, &e, sizeof( e ) );
+	}
+	b3SnapW_I32( buf, world->sensorBeginEvents.count );
+	for ( int k = 0; k < world->sensorBeginEvents.count; ++k )
+	{
+		b3SensorBeginTouchEvent e = world->sensorBeginEvents.data[k];
+		e.sensorShapeId.world0 = 0;
+		e.visitorShapeId.world0 = 0;
+		b3SnapW_Bytes( buf, &e, sizeof( e ) );
+	}
+	b3SnapW_I32( buf, world->contactHitEvents.count );
+	for ( int k = 0; k < world->contactHitEvents.count; ++k )
+	{
+		// By field: its padding is whatever the stack held
+		const b3ContactHitEvent* from = world->contactHitEvents.data + k;
+		b3ContactHitEvent e;
+		memset( &e, 0, sizeof( e ) );
+		e.shapeIdA = from->shapeIdA;
+		e.shapeIdB = from->shapeIdB;
+		e.contactId = from->contactId;
+		e.point = from->point;
+		e.normal = from->normal;
+		e.approachSpeed = from->approachSpeed;
+		e.userMaterialIdA = from->userMaterialIdA;
+		e.userMaterialIdB = from->userMaterialIdB;
+		e.shapeIdA.world0 = 0;
+		e.shapeIdB.world0 = 0;
+		e.contactId.world0 = 0;
+		b3SnapW_Bytes( buf, &e, sizeof( e ) );
 	}
 
 	return buf->size - startSize;
@@ -1412,6 +1451,30 @@ bool b3DeserializeIntoShell( const uint8_t* data, int size, b3World* world, b3Re
 		}
 	}
 
+	b3DesPodArray( r, world->contactBeginEvents );
+	for ( int k = 0; r->ok && k < world->contactBeginEvents.count; ++k )
+	{
+		b3ContactBeginTouchEvent* e = world->contactBeginEvents.data + k;
+		e->shapeIdA.world0 = world->worldId;
+		e->shapeIdB.world0 = world->worldId;
+		e->contactId.world0 = world->worldId;
+	}
+	b3DesPodArray( r, world->sensorBeginEvents );
+	for ( int k = 0; r->ok && k < world->sensorBeginEvents.count; ++k )
+	{
+		b3SensorBeginTouchEvent* e = world->sensorBeginEvents.data + k;
+		e->sensorShapeId.world0 = world->worldId;
+		e->visitorShapeId.world0 = world->worldId;
+	}
+	b3DesPodArray( r, world->contactHitEvents );
+	for ( int k = 0; r->ok && k < world->contactHitEvents.count; ++k )
+	{
+		b3ContactHitEvent* e = world->contactHitEvents.data + k;
+		e->shapeIdA.world0 = world->worldId;
+		e->shapeIdB.world0 = world->worldId;
+		e->contactId.world0 = world->worldId;
+	}
+
 	return r->ok;
 }
 
@@ -1517,29 +1580,26 @@ int b3World_SaveSnapshot( b3WorldId worldId, b3SnapshotContext* context, const v
 	return out->size;
 }
 
-bool b3World_LoadSnapshot( b3WorldId worldId, b3SnapshotContext* context, const void* data, int size )
+// The geometry table's size: negative when this isn't a whole image.
+static int b3ReadImageHead( b3SnapReader* r, int size )
 {
-	b3World* world = b3GetUnlockedWorldFromId( worldId );
-	if ( world == NULL )
-	{
-		return false;
-	}
-
-	b3GeometryRegistry* registry = &context->recording->registry;
-	b3SnapReader reader = { (const uint8_t*)data, 0, size, true };
-	b3SnapReader* r = &reader;
 	if ( b3SnapR_U32( r ) != B3_IMAGE_MAGIC || b3SnapR_I32( r ) != size )
 	{
-		return false;
+		return -1;
 	}
 
 	int count = b3SnapR_I32( r );
 	if ( r->ok == false || b3SnapCheckCount( r, count, sizeof( b3RegistrySlot ), 20 ) == false )
 	{
-		return false;
+		return -1;
 	}
+	return count;
+}
 
-	b3RegistrySlot* slots = (b3RegistrySlot*)b3Alloc( ( count + 1 ) * sizeof( b3RegistrySlot ) );
+// Interns what the table carries, and finds the rest. `slots`, when there are any, says where each is.
+static bool b3ReadGeometryTable( b3SnapReader* r, b3GeometryRegistry* registry, b3RegistrySlot* slots, int count )
+{
+	int size = r->size;
 	bool ok = true;
 	for ( int i = 0; i < count && ok; ++i )
 	{
@@ -1551,7 +1611,7 @@ bool b3World_LoadSnapshot( b3WorldId worldId, b3SnapshotContext* context, const 
 		int index = B3_NULL_INDEX;
 		if ( r->ok && travels > 0 && travels <= size - r->cursor )
 		{
-			index = (int)b3InternGeometry( registry, kind, hash, reader.data + r->cursor, travels );
+			index = (int)b3InternGeometry( registry, kind, hash, r->data + r->cursor, travels );
 			r->cursor += travels;
 		}
 		else
@@ -1567,13 +1627,40 @@ bool b3World_LoadSnapshot( b3WorldId worldId, b3SnapshotContext* context, const 
 			}
 		}
 		ok = r->ok && index != B3_NULL_INDEX;
-		if ( ok )
+		if ( ok && slots != NULL )
 		{
 			const b3GeometryEntry* e = registry->entries.data + index;
 			slots[i] = (b3RegistrySlot){ e->kind, e->byteCount, e->bytes };
 		}
 	}
+	return ok;
+}
 
+bool b3SnapshotContext_AddImage( b3SnapshotContext* context, const void* data, int size )
+{
+	b3SnapReader reader = { (const uint8_t*)data, 0, size, true };
+	int count = b3ReadImageHead( &reader, size );
+	return count >= 0 && b3ReadGeometryTable( &reader, &context->recording->registry, NULL, count );
+}
+
+bool b3World_LoadSnapshot( b3WorldId worldId, b3SnapshotContext* context, const void* data, int size )
+{
+	b3World* world = b3GetUnlockedWorldFromId( worldId );
+	if ( world == NULL )
+	{
+		return false;
+	}
+
+	b3SnapReader reader = { (const uint8_t*)data, 0, size, true };
+	b3SnapReader* r = &reader;
+	int count = b3ReadImageHead( r, size );
+	if ( count < 0 )
+	{
+		return false;
+	}
+
+	b3RegistrySlot* slots = (b3RegistrySlot*)b3Alloc( ( count + 1 ) * sizeof( b3RegistrySlot ) );
+	bool ok = b3ReadGeometryTable( r, &context->recording->registry, slots, count );
 	if ( ok )
 	{
 		b3RecReader rdr;

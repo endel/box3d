@@ -33,6 +33,9 @@ static b3WorldId CreatePile( const b3MeshData* floor, b3BodyId* lastBodyId )
 
 	b3BoxHull box = b3MakeBoxHull( 0.5f, 0.5f, 0.5f );
 	b3ShapeDef shapeDef = b3DefaultShapeDef();
+	shapeDef.enableContactEvents = true;
+	shapeDef.enableHitEvents = true;
+	shapeDef.enableSensorEvents = true;
 	b3BodyDef bodyDef = b3DefaultBodyDef();
 	bodyDef.type = b3_dynamicBody;
 	for ( int i = 0; i < COLUMN_COUNT * HEIGHT_COUNT; ++i )
@@ -204,11 +207,104 @@ static int TruncatedImageRefused( void )
 	return 0;
 }
 
+// What the last step reported reads the same after a load: it's there until the next step.
+static int EventsTravel( void )
+{
+	b3MeshData* floor = b3CreateGridMesh( 20, 20, 2.0f, 1, true );
+	b3BodyId bodyId;
+	b3WorldId savedId = CreatePile( floor, &bodyId );
+
+	b3BodyDef sensorBody = b3DefaultBodyDef();
+	sensorBody.position = (b3Pos){ 3.0f, 2.0f, 0.0f };
+	b3BodyId sensorId = b3CreateBody( savedId, &sensorBody );
+	b3ShapeDef sensorDef = b3DefaultShapeDef();
+	sensorDef.isSensor = true;
+	sensorDef.enableSensorEvents = true;
+	b3BoxHull zone = b3MakeBoxHull( 6.0f, 3.0f, 3.0f );
+	b3CreateHullShape( sensorId, &sensorDef, &zone.base );
+
+	b3SnapshotContext* savedContext = b3CreateSnapshotContext();
+	int tries = 0;
+	b3ContactEvents events = b3World_GetContactEvents( savedId );
+	while ( events.beginCount == 0 && tries < 120 )
+	{
+		Step( savedId, 1 );
+		events = b3World_GetContactEvents( savedId );
+		tries += 1;
+	}
+	ENSURE( events.beginCount > 0 && events.hitCount > 0 );
+
+	const void* data;
+	int size = b3World_SaveSnapshot( savedId, savedContext, &data );
+	b3WorldId loadedId = CreateEmptyWorld();
+	b3SnapshotContext* loadedContext = b3CreateSnapshotContext();
+	ENSURE( b3SnapshotContext_AddImage( loadedContext, data, size ) );
+	ENSURE( b3SnapshotContext_AddImage( loadedContext, data, size / 2 ) == false );
+	ENSURE( b3World_LoadSnapshot( loadedId, loadedContext, data, size ) );
+
+	b3ContactEvents loaded = b3World_GetContactEvents( loadedId );
+	ENSURE( loaded.beginCount == events.beginCount && loaded.endCount == events.endCount && loaded.hitCount == events.hitCount );
+	ENSURE( loaded.beginEvents[0].shapeIdA.world0 == loadedId.index1 - 1 );
+	ENSURE( loaded.beginEvents[0].shapeIdA.index1 == events.beginEvents[0].shapeIdA.index1 );
+	ENSURE( b3Shape_IsValid( loaded.beginEvents[0].shapeIdA ) );
+	b3SensorEvents saw = b3World_GetSensorEvents( savedId );
+	b3SensorEvents sawLoaded = b3World_GetSensorEvents( loadedId );
+	ENSURE( saw.beginCount == sawLoaded.beginCount && saw.endCount == sawLoaded.endCount );
+
+	Step( savedId, 30 );
+	Step( loadedId, 30 );
+	ENSURE( SameImage( savedId, savedContext, loadedId, loadedContext ) );
+
+	b3DestroyWorld( savedId );
+	b3DestroyWorld( loadedId );
+	b3DestroySnapshotContext( savedContext );
+	b3DestroySnapshotContext( loadedContext );
+	b3DestroyMesh( floor );
+	return 0;
+}
+
+// A world that went its own way takes on the saved one, what it held replaced.
+static int LoadsOverLiveWorld( void )
+{
+	b3MeshData* floor = b3CreateGridMesh( 20, 20, 2.0f, 1, true );
+	b3BodyId bodyId;
+	b3WorldId savedId = CreatePile( floor, &bodyId );
+	b3SnapshotContext* savedContext = b3CreateSnapshotContext();
+	b3SnapshotContext_AddWorld( savedContext, savedId );
+	Step( savedId, 30 );
+
+	b3BodyId liveBodyId;
+	b3WorldId liveId = CreatePile( floor, &liveBodyId );
+	b3SnapshotContext* liveContext = b3CreateSnapshotContext();
+	b3SnapshotContext_AddWorld( liveContext, liveId );
+	b3Body_ApplyLinearImpulseToCenter( liveBodyId, (b3Vec3){ 40.0f, 0.0f, 0.0f }, true );
+	Step( liveId, 200 );
+
+	for ( int i = 0; i < 3; ++i )
+	{
+		const void* data;
+		int size = b3World_SaveSnapshot( savedId, savedContext, &data );
+		ENSURE( b3World_LoadSnapshot( liveId, liveContext, data, size ) );
+		Step( savedId, 20 );
+		Step( liveId, 20 );
+		ENSURE( SameImage( savedId, savedContext, liveId, liveContext ) );
+	}
+
+	b3DestroyWorld( savedId );
+	b3DestroyWorld( liveId );
+	b3DestroySnapshotContext( savedContext );
+	b3DestroySnapshotContext( liveContext );
+	b3DestroyMesh( floor );
+	return 0;
+}
+
 int SnapshotTest( void )
 {
 	RUN_SUBTEST( ResumesExactly );
 	RUN_SUBTEST( SharedGeometryStaysOut );
 	RUN_SUBTEST( MissingGeometryRefused );
 	RUN_SUBTEST( TruncatedImageRefused );
+	RUN_SUBTEST( EventsTravel );
+	RUN_SUBTEST( LoadsOverLiveWorld );
 	return 0;
 }

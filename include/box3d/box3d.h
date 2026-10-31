@@ -540,7 +540,13 @@ B3_API void b3DestroySnapshotContext( b3SnapshotContext* context );
 /// in the image.
 B3_API void b3SnapshotContext_AddWorld( b3SnapshotContext* context, b3WorldId worldId );
 
-/// Save a world's simulation state. Call this between steps. User data is not saved.
+/// Add the geometry an image carries, as loading it does. A caller whose allocator keeps this
+/// context's memory apart from the world's calls this first: the load then allocates nothing here.
+/// @return false if the image is cut short, or needs geometry this context lacks
+B3_API bool b3SnapshotContext_AddImage( b3SnapshotContext* context, const void* data, int size );
+
+/// Save a world's simulation state, the last step's contact and sensor events included. Call this
+/// between steps. User data, body move events and joint events are not saved.
 /// @param worldId the world to save
 /// @param context geometry to leave out of the image
 /// @param data receives the image, owned by the context and valid until its next save
