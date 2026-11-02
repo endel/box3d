@@ -15,6 +15,10 @@
 #include "simd_neon.h"
 #endif
 
+#if defined( B3_SIMD_WASM )
+#include "simd_wasm.h"
+#endif
+
 #if defined( B3_SIMD_SSE2 )
 #include "simd_sse2.h"
 #endif

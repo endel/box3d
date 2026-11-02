@@ -49,7 +49,7 @@
 	#define B3_CPU_X86_X64
 #elif defined( __aarch64__ ) || defined( _M_ARM64 ) || defined( __arm__ ) || defined( _M_ARM )
 	#define B3_CPU_ARM
-#elif defined( __EMSCRIPTEN__ )
+#elif defined( __EMSCRIPTEN__ ) || defined( __wasm_simd128__ )
 	#define B3_CPU_WASM
 #else
 	#define B3_CPU_UNKNOWN
@@ -76,6 +76,8 @@
 			#define B3_SIMD_NONE
 		#endif
 		//#pragma message("B3_SIMD_NEON")
+	#elif defined( B3_CPU_WASM ) && defined( __wasm_simd128__ ) && !defined( __EMSCRIPTEN__ )
+		#define B3_SIMD_WASM
 	#elif defined( B3_CPU_WASM )
 		#define B3_SIMD_SSE2
 		//#pragma message("B3_SIMD_SSE2")

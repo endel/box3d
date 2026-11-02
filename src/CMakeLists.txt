@@ -80,6 +80,7 @@ set(BOX3D_SOURCE_FILES
 	simd_neon.h
 	simd_scalar.h
 	simd_sse2.h
+	simd_wasm.h
 	simd_wide.h
 	simd.c
 	simd.h
